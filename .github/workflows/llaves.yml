@@ -1,0 +1,56 @@
+name: NegoZona - oportunidades de llaves
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 11 * * 1,4"
+
+permissions:
+  contents: write
+
+jobs:
+  extract-and-rank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements_llaves.txt
+          playwright install --with-deps chromium
+
+      - name: Extraer y priorizar anuncios
+        env:
+          NEGOZONA_SCOPE: uruguay
+          TARGET_BUDGET_USD: "60000"
+          MAX_PAGES: "10"
+        run: python llaves_negocios.py
+
+      - name: Guardar historial para detectar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add historial_anuncios.csv
+          git diff --cached --quiet || git commit -m "Actualizar historial NegoZona"
+          git push
+
+      - name: Subir resultados
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-negozona-${{ github.run_number }}
+          path: |
+            negocios_negozona.csv
+            top_contactar.csv
+            revisar_manual.csv
+            cambios_detectados.csv
+            informe_llaves.html
+          if-no-files-found: error
+          retention-days: 30
