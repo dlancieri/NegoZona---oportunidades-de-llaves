@@ -50,6 +50,7 @@ jobs:
             negocios_negozona.csv
             top_contactar.csv
             revisar_manual.csv
+            no_alineados.csv
             cambios_detectados.csv
             informe_llaves.html
           if-no-files-found: error

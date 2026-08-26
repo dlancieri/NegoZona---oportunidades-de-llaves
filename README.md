@@ -12,6 +12,14 @@ La puntuación es preliminar: evalúa el aviso y el encaje operativo. La rentabi
 - `estado_llaves.csv`: seguimiento manual de cada anuncio.
 - `historial_anuncios.csv`: lo crea el primer proceso y permite detectar anuncios nuevos, retirados o con cambios de precio.
 
+La selección se hace en dos etapas. Primero descarta negocios incompatibles con el perfil: gastronomía, oficios personales, indumentaria, coordinación logística, negocios sin actividad, zonas fuera de Montevideo/Canelones/Maldonado y precios mayores al presupuesto. Después ordena los restantes por modelo físico, evidencia de funcionamiento, delegabilidad e información económica.
+
+Los resultados quedan separados en:
+
+- `top_contactar.csv`: Prioridad A, alineados con el perfil.
+- `revisar_manual.csv`: Prioridad B y seguimientos ya iniciados.
+- `no_alineados.csv`: descartados por perfil, zona, presupuesto o estado.
+
 ## Incorporarlo al repositorio existente
 
 Copiar el contenido de esta carpeta a la raíz del repositorio usado para el automatizador inmobiliario. Los nombres son diferentes, por lo que no reemplaza `main.py` ni su workflow.

@@ -35,63 +35,89 @@ SCOPE = os.getenv("NEGOZONA_SCOPE", "uruguay").strip().lower()
 OUTPUT_ALL = "negocios_negozona.csv"
 OUTPUT_CONTACT = "top_contactar.csv"
 OUTPUT_REVIEW = "revisar_manual.csv"
+OUTPUT_NOT_ALIGNED = "no_alineados.csv"
 OUTPUT_CHANGES = "cambios_detectados.csv"
 OUTPUT_HISTORY = "historial_anuncios.csv"
 OUTPUT_REPORT = "informe_llaves.html"
 MANUAL_STATE = "estado_llaves.csv"
 
-PREFERRED_TERMS = {
-    "lavanderia": 12,
-    "lavadero": 10,
-    "industria": 10,
-    "manufactura": 10,
-    "servicios": 8,
-    "distribucion": 8,
-    "mayorista": 7,
-    "taller": 7,
-    "equipado": 6,
-    "funcionando": 7,
-    "en funcionamiento": 7,
-    "cartera de clientes": 10,
-    "clientes fijos": 10,
-    "personal estable": 8,
-    "encargado": 8,
-    "habilitado": 5,
-    "habilitaciones": 5,
-    "empresa": 4,
-    "b2b": 10,
-}
-
-DEMANDING_TERMS = {
-    "restaurante": -10,
-    "bar ": -12,
-    "pub": -12,
-    "cafeteria": -8,
-    "rotiseria": -9,
-    "panaderia": -8,
-    "atendido por su dueno": -12,
-    "autoempleo": -10,
-    "trabajarlo uno mismo": -12,
-    "horario extendido": -10,
-    "temporada": -8,
-    "estacional": -8,
-}
-
 FINANCIAL_SIGNALS = {
-    "facturacion": 10,
-    "ventas mensuales": 10,
-    "ganancia": 9,
-    "utilidad": 9,
-    "rentabilidad": 8,
-    "balance": 7,
-    "comprobable": 7,
-    "alquiler": 4,
-    "contrato": 4,
-    "empleados": 4,
-    "personal": 4,
-    "anos de actividad": 5,
-    "antiguedad": 5,
+    "facturacion": 20,
+    "ventas mensuales": 20,
+    "venta mensual": 20,
+    "ganancia": 25,
+    "utilidad": 25,
+    "rentabilidad": 15,
+    "balance": 15,
+    "comprobable": 15,
+    "alquiler": 8,
+    "contrato": 8,
+    "empleados": 10,
+    "personal": 10,
+    "encargado": 15,
+    "carga horaria": 15,
+    "dedicacion del dueno": 15,
 }
+
+OPERATING_TERMS = {
+    "pleno funcionamiento": 30,
+    "en funcionamiento": 30,
+    "funcionando": 30,
+    "en marcha": 25,
+    "en actividad": 25,
+    "cartera de clientes": 20,
+    "clientes fijos": 20,
+    "trabajo fijo": 18,
+    "facturacion": 15,
+    "trayectoria": 12,
+    "antiguedad": 12,
+    "habilitado": 8,
+    "habilitaciones": 8,
+}
+
+DELEGATION_TERMS = {
+    "encargado": 35,
+    "personal estable": 30,
+    "empleados": 25,
+    "operarios": 30,
+    "equipo de trabajo": 25,
+    "equipo formado": 25,
+    "semi automatica": 25,
+    "semiautomatica": 25,
+    "automatizada": 30,
+    "sin presencia del dueno": 40,
+}
+
+OWNER_DEPENDENCY_TERMS = (
+    "atendido por su dueno",
+    "autoempleo",
+    "se tu propio jefe",
+    "solo de ponerse a trabajar",
+    "trabajarlo uno mismo",
+    "servicio a domicilio",
+)
+
+RETAIL_TERMS = (
+    "kiosco",
+    "minimarket",
+    "mini mercado",
+    "bazar",
+    "regaleria",
+    "tienda de ropa",
+    "local de ropa",
+    "papeleria",
+    "perfumeria",
+    "ferreteria",
+    "pet shop",
+)
+
+PARTNERSHIP_TERMS = (
+    "venta del 50%",
+    "venta de 50%",
+    "participacion mayoritaria",
+    "participacion societaria",
+    "busca socio",
+)
 
 
 def now_uy() -> datetime:
@@ -222,61 +248,93 @@ def score_listing(row: dict[str, Any]) -> dict[str, Any]:
     full_text = normalize_text(
         " ".join(str(row.get(key) or "") for key in ("titulo", "categoria", "subcategoria", "ubicacion", "descripcion"))
     )
+    category = normalize_text(row.get("categoria"))
+    subcategory = normalize_text(row.get("subcategoria"))
+    location = normalize_text(row.get("ubicacion"))
     description = str(row.get("descripcion") or "")
     price = row.get("precio_usd")
 
-    information = 20
-    information += 15 if price else 0
-    information += 8 if row.get("ubicacion") else 0
-    information += 7 if row.get("categoria") else 0
-    information += 5 if row.get("subcategoria") else 0
-    information += 5 if row.get("telefono") else 0
-    information += 10 if len(description) >= 120 else 5 if len(description) >= 60 else 0
-
-    business_signal = 20
-    signal_labels: list[str] = []
+    # La información formal del aviso (teléfono, categoría, ubicación) ya no
+    # compensa la falta de datos económicos. Este score mide información útil.
+    information = 5 if price else 0
+    information += 5 if len(description) >= 120 else 2 if len(description) >= 60 else 0
+    financial_labels: list[str] = []
     for term, points in FINANCIAL_SIGNALS.items():
         if term in full_text:
-            business_signal += points
-            signal_labels.append(term)
+            information += points
+            financial_labels.append(term)
 
-    fit = 48
-    fit_labels: list[str] = []
-    for term, points in PREFERRED_TERMS.items():
+    model = 0
+    model_labels: list[str] = []
+    is_industry = category == "industria y manufactura"
+    is_distribution = contains_any(full_text, ("distribucion", "distribuidora", "importadora", "mayorista", "b2b"))
+    is_production = contains_any(full_text, ("fabrica", "fabricacion propia", "planta de elaboracion", "planta semi automatica", "planta semiautomatica"))
+    is_laundry = contains_any(full_text, ("lavanderia", "lavadero de ropas", "lavadero de ropa"))
+    is_medical_equipment = contains_any(full_text, ("equipos medicos", "equipamiento medico"))
+    has_machinery = contains_any(full_text, ("maquinaria", "maquinas", "equipamiento", "totalmente equipado", "infraestructura"))
+    has_recurring_customers = contains_any(full_text, ("cartera de clientes", "clientes fijos", "trabajo fijo", "contratos vigentes"))
+
+    if is_industry:
+        model += 30
+        model_labels.append("industria/manufactura")
+    if is_production:
+        model += 35
+        model_labels.append("producción propia")
+    if is_distribution:
+        model += 30
+        model_labels.append("distribución/importación")
+    if is_laundry:
+        model += 30
+        model_labels.append("servicio recurrente de lavandería")
+    if is_medical_equipment:
+        model += 20
+        model_labels.append("equipamiento médico")
+    if "taller" in full_text:
+        model += 12
+        model_labels.append("taller")
+    if has_machinery:
+        model += 10
+        model_labels.append("activos físicos")
+    if has_recurring_customers:
+        model += 18
+        model_labels.append("clientes o contratos recurrentes")
+
+    operation = 0
+    operation_labels: list[str] = []
+    for term, points in OPERATING_TERMS.items():
         if term in full_text:
-            fit += points
-            fit_labels.append(term)
-    for term, points in DEMANDING_TERMS.items():
+            operation += points
+            operation_labels.append(term)
+    if re.search(r"\b(?:[5-9]|[1-9]\d)\s+anos\b", full_text):
+        operation += 12
+        operation_labels.append("antigüedad declarada")
+    if has_machinery:
+        operation += 8
+
+    delegation = 15
+    delegation_labels: list[str] = []
+    for term, points in DELEGATION_TERMS.items():
         if term in full_text:
-            fit += points
-            fit_labels.append(f"exigencia: {term.strip()}")
+            delegation += points
+            delegation_labels.append(term)
+    if is_industry:
+        delegation += 10
+    if contains_any(full_text, OWNER_DEPENDENCY_TERMS):
+        delegation -= 35
+        delegation_labels.append("posible autoempleo")
 
-    location = normalize_text(row.get("ubicacion"))
-    if "montevideo" in location:
-        fit += 8
-        fit_labels.append("Montevideo")
-    elif "canelones" in location or "maldonado" in location:
-        fit += 3
-        fit_labels.append("zona secundaria viable")
-
-    if price:
-        if price <= 25_000:
-            fit += 15
-            fit_labels.append("inversión hasta USD 25.000")
-        elif price <= 40_000:
-            fit += 11
-            fit_labels.append("inversión hasta USD 40.000")
-        elif price <= TARGET_BUDGET_USD:
-            fit += 6
-            fit_labels.append(f"dentro del presupuesto objetivo de USD {TARGET_BUDGET_USD:,}")
-        elif price > TARGET_BUDGET_USD * 1.5:
-            fit -= 22
-            fit_labels.append("muy por encima del presupuesto objetivo")
-        else:
-            fit -= 8
-            fit_labels.append("por encima del presupuesto objetivo")
-    else:
-        fit -= 6
+    is_gastronomy = category == "gastronomia"
+    is_personal_skill = contains_any(
+        f"{category} {subcategory} {full_text}",
+        ("peluquer", "manicure", "centro de estetica", "optica", "salon de belleza"),
+    )
+    is_clothing = category == "indumentaria y moda"
+    is_retail = contains_any(full_text, RETAIL_TERMS)
+    is_logistics_coordination = contains_any(full_text, ("coordinacion y transporte", "transporte logistico remoto"))
+    is_partnership = contains_any(full_text, PARTNERSHIP_TERMS)
+    is_franchise = "franquicia" in full_text
+    inactive = contains_any(full_text, ("sin actividad", "actualmente inactiva", "actualmente inactivo"))
+    assets_only = contains_any(full_text, ("elementos para fabrica", "solo equipamiento", "venta de maquinaria"))
 
     risk = 0
     risk_labels: list[str] = []
@@ -291,33 +349,92 @@ def score_listing(row: dict[str, Any]) -> dict[str, Any]:
     for label, terms in required_data.items():
         if not contains_any(full_text, terms):
             missing.append(label)
-    risk += 4 * len(missing)
+    risk += 5 * len(missing)
     if not price:
-        risk += 10
+        risk += 15
         risk_labels.append("sin precio publicado")
     if len(description) < 60:
-        risk += 8
-        risk_labels.append("descripción escasa")
-    if contains_any(full_text, ("urgente", "oportunidad unica", "por viaje")):
-        risk += 4
-        risk_labels.append("lenguaje de urgencia")
-    if contains_any(full_text, ("temporada", "estacional")):
         risk += 10
+        risk_labels.append("descripción escasa")
+    if contains_any(full_text, ("temporada", "estacional")):
+        risk += 15
         risk_labels.append("posible estacionalidad")
+    if is_partnership:
+        risk += 25
+        risk_labels.append("compra parcial o socio")
+    if is_retail:
+        risk += 20
+        risk_labels.append("comercio minorista con presencia diaria")
+    if is_franchise:
+        risk += 15
+        risk_labels.append("dependencia de franquicia")
+    if delegation < 40:
+        risk += 15
+        risk_labels.append("delegabilidad no demostrada")
+
+    allowed_location = contains_any(location, ("montevideo", "canelones", "maldonado"))
+    hard_reason = ""
+    if is_gastronomy:
+        hard_reason = "Gastronomía: alta dedicación y horarios extensos"
+    elif is_personal_skill:
+        hard_reason = "Servicio dependiente de oficio o personal especializado"
+    elif is_clothing:
+        hard_reason = "Comercio minorista de indumentaria"
+    elif is_logistics_coordination:
+        hard_reason = "Coordinación logística, actividad que no buscás"
+    elif inactive:
+        hard_reason = "No compra flujo actual: el negocio está sin actividad"
+    elif assets_only:
+        hard_reason = "Venta de activos, no de un flujo funcionando"
 
     information = max(0, min(information, 100))
-    business_signal = max(0, min(business_signal, 100))
-    fit = max(0, min(fit, 100))
+    model = max(0, min(model, 100))
+    operation = max(0, min(operation, 100))
+    delegation = max(0, min(delegation, 100))
     risk = max(0, min(risk, 100))
-    contact_score = round(0.45 * fit + 0.25 * information + 0.30 * business_signal - 0.20 * risk)
+    raw_contact_score = (
+        0.45 * model
+        + 0.25 * operation
+        + 0.15 * delegation
+        + 0.15 * information
+        - 0.20 * risk
+    )
+    contact_score = round(1.35 * raw_contact_score)
+    if price:
+        if 25_000 <= price <= 40_000:
+            contact_score += 8
+        elif price <= TARGET_BUDGET_USD:
+            contact_score += 5
+    if "montevideo" in location:
+        contact_score += 5
+    elif contains_any(location, ("canelones", "maldonado")):
+        contact_score += 2
     contact_score = max(0, min(contact_score, 100))
 
-    if contact_score >= 55:
-        recommendation = "Contactar"
-    elif contact_score >= 45:
-        recommendation = "Revisar / pedir datos"
+    if hard_reason:
+        alignment = "No alineado"
+        recommendation = f"No alineado: {hard_reason}"
+    elif not allowed_location:
+        alignment = "Fuera de zona"
+        recommendation = "Fuera de zona objetivo"
+    elif price and price > TARGET_BUDGET_USD:
+        alignment = "Fuera de presupuesto"
+        recommendation = f"Fuera de presupuesto (más de USD {TARGET_BUDGET_USD:,})"
+    elif is_partnership and model >= 30 and operation >= 20:
+        alignment = "Dudoso"
+        recommendation = "Prioridad B - solo si aceptás socio y falta validar control"
+    elif is_retail and not (model >= 45 and operation >= 30 and delegation >= 40):
+        alignment = "No alineado"
+        recommendation = "No alineado: comercio minorista con alta presencia probable"
+    elif model >= 50 and operation >= 30:
+        alignment = "Alineado"
+        recommendation = "Prioridad A - contactar"
+    elif model >= 30 and operation >= 20:
+        alignment = "Dudoso"
+        recommendation = "Prioridad B - validar delegabilidad y caja"
     else:
-        recommendation = "Baja prioridad"
+        alignment = "No alineado"
+        recommendation = "No alineado: no demuestra flujo delegable ni modelo compatible"
 
     questions = []
     question_map = {
@@ -344,12 +461,16 @@ def score_listing(row: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "score_contacto": contact_score,
-        "score_encaje": fit,
+        "alineacion_perfil": alignment,
+        "score_encaje": model,
+        "score_modelo": model,
+        "score_operacion": operation,
+        "score_delegabilidad": delegation,
         "score_informacion": information,
-        "score_senal_negocio": business_signal,
+        "score_senal_negocio": operation,
         "riesgo_preliminar": risk,
         "recomendacion": recommendation,
-        "senales": " | ".join(sorted(set(signal_labels + fit_labels))),
+        "senales": " | ".join(sorted(set(model_labels + operation_labels + delegation_labels + financial_labels))),
         "datos_faltantes": " | ".join(missing),
         "alertas": " | ".join(sorted(set(risk_labels))) or "Sin alertas concluyentes en el aviso",
         "mensaje_contacto": message,
@@ -414,6 +535,7 @@ def load_manual_state() -> pd.DataFrame:
 
 def apply_manual_state(df: pd.DataFrame) -> pd.DataFrame:
     state = load_manual_state().rename(columns={"fecha": "fecha_estado", "notas": "notas_estado"})
+    df = df.drop(columns=["estado", "fecha_estado", "notas_estado"], errors="ignore")
     df["external_id"] = df["external_id"].astype(str)
     df = df.merge(state, on="external_id", how="left")
     for column in ("estado", "fecha_estado", "notas_estado"):
@@ -482,7 +604,10 @@ def safe_cell(value: Any) -> str:
 
 
 def generate_report(df: pd.DataFrame, changes: pd.DataFrame) -> None:
-    active = df[~df["recomendacion"].astype(str).str.startswith("Excluir:")].copy()
+    active = df[
+        df["recomendacion"].astype(str).str.startswith(("Prioridad A", "Prioridad B"))
+        | df["recomendacion"].isin(["Seguimiento pendiente", "Analizar respuesta"])
+    ].copy()
     cards = []
     for _, row in active.sort_values("score_contacto", ascending=False).head(40).iterrows():
         price = safe_cell(row.get("precio_texto")) or "Precio no publicado"
@@ -492,8 +617,9 @@ def generate_report(df: pd.DataFrame, changes: pd.DataFrame) -> None:
           <div><h2>{safe_cell(row.get('titulo'))}</h2><p>{safe_cell(row.get('ubicacion'))} · {price}</p></div></div>
           <div class="metrics">
             <div><b>Acción</b><br>{safe_cell(row.get('recomendacion'))}</div>
-            <div><b>Encaje</b><br>{safe_cell(row.get('score_encaje'))}/100</div>
-            <div><b>Información</b><br>{safe_cell(row.get('score_informacion'))}/100</div>
+            <div><b>Modelo</b><br>{safe_cell(row.get('score_modelo'))}/100</div>
+            <div><b>Operación real</b><br>{safe_cell(row.get('score_operacion'))}/100</div>
+            <div><b>Delegabilidad</b><br>{safe_cell(row.get('score_delegabilidad'))}/100</div>
             <div><b>Riesgo preliminar</b><br>{safe_cell(row.get('riesgo_preliminar'))}/100</div>
           </div>
           <p><b>Rubro:</b> {safe_cell(row.get('categoria'))} / {safe_cell(row.get('subcategoria'))}</p>
@@ -514,8 +640,8 @@ body{{font-family:Arial,sans-serif;background:#f3f5f7;color:#1f2933;margin:0;pad
 h2{{margin:0 0 4px}}p{{line-height:1.5}}.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:18px 0}}
 .metrics div{{background:#f4f7f9;border-radius:9px;padding:11px}}a{{color:#0b65a5;font-weight:bold}}summary{{cursor:pointer;font-weight:bold}}
 </style></head><body><main><h1>Llaves de negocios priorizadas</h1>
-<div class="summary"><b>{len(active)}</b> anuncios activos · <b>{new_count}</b> nuevos o sin historial.<br>
-Generado {safe_cell(now_uy().strftime('%Y-%m-%d %H:%M'))}. El score decide a quién consultar; no sustituye la verificación financiera.</div>
+<div class="summary"><b>{len(active)}</b> anuncios alineados o dudosos · <b>{new_count}</b> nuevos o sin historial.<br>
+Generado {safe_cell(now_uy().strftime('%Y-%m-%d %H:%M'))}. Solo se muestran operaciones físicas con flujo aparente y posibilidad de gestión; los descartados quedan en el CSV general.</div>
 {''.join(cards) if cards else '<p>Sin anuncios activos.</p>'}</main></body></html>"""
     Path(OUTPUT_REPORT).write_text(document, encoding="utf-8")
 
@@ -531,14 +657,19 @@ def write_outputs(rows: list[dict[str, Any]]) -> None:
     df.to_csv(OUTPUT_ALL, index=False)
     changes.to_csv(OUTPUT_CHANGES, index=False)
     contact = df[
-        (df["recomendacion"] == "Contactar")
+        df["recomendacion"].astype(str).str.startswith("Prioridad A")
     ]
     review = df[
-        (df["recomendacion"] != "Contactar")
-        & ~df["recomendacion"].astype(str).str.startswith("Excluir:")
+        df["recomendacion"].astype(str).str.startswith("Prioridad B")
+        | df["recomendacion"].isin(["Seguimiento pendiente", "Analizar respuesta"])
+    ]
+    not_aligned = df[
+        ~df.index.isin(contact.index)
+        & ~df.index.isin(review.index)
     ]
     contact.to_csv(OUTPUT_CONTACT, index=False)
     review.to_csv(OUTPUT_REVIEW, index=False)
+    not_aligned.to_csv(OUTPUT_NOT_ALIGNED, index=False)
     generate_report(df, changes)
 
     history_columns = [
@@ -550,7 +681,8 @@ def write_outputs(rows: list[dict[str, Any]]) -> None:
     print("\nRESUMEN")
     print(f"Anuncios únicos: {len(df)}")
     print(f"Contactar: {len(contact)}")
-    print(f"Revisar / baja prioridad: {len(review)}")
+    print(f"Revisar / seguimiento: {len(review)}")
+    print(f"No alineados / fuera de alcance: {len(not_aligned)}")
     print(f"Cambios: {len(changes)}")
 
 
